@@ -93,6 +93,63 @@ def tema_label(normas):
     return " · ".join(b for b, _ in c.most_common(2)) if c else ""
 
 
+CASO_HEAD = re.compile(r"^(COD|PREGUNTA|RESPUESTA [A-H]|SOLUCION|NORMA|REFERENCIA DOCTRINAL|NOTA):[ \t]*(.*)$")
+
+
+def clean_block(lines):
+    """Une líneas conservando saltos de párrafo, sin líneas vacías repetidas."""
+    out, blank = [], False
+    for l in lines:
+        l = l.rstrip()
+        if not l.strip():
+            blank = bool(out)
+            continue
+        if blank and out:
+            out.append("")
+        out.append(re.sub(r"\s+", " ", l.strip()))
+        blank = False
+    return "\n".join(out).strip()
+
+
+def parse_casos(path: pathlib.Path):
+    text = read_text(path).replace("\r\n", "\n").replace("\r", "\n")
+    out = []
+    for chunk in re.split(r"\n(?=COD:)", text.strip()):
+        sec, cur = {}, None
+        for line in chunk.split("\n"):
+            m = CASO_HEAD.match(line.strip())
+            if m:
+                cur = m.group(1)
+                sec[cur] = [m.group(2)] if m.group(2) else []
+            elif cur:
+                sec[cur].append(line)
+        if "COD" not in sec:
+            continue
+        cod = clean_block(sec["COD"])
+        letters = [l for l in "ABCDEFGH" if f"RESPUESTA {l}" in sec]
+        sol = re.sub(r"^RESPUESTA\s*", "", clean_block(sec.get("SOLUCION", [])).upper()).strip(" .")
+        if len(letters) < 2 or sol not in letters:
+            print(f"::warning::caso {cod}: respuestas {letters} / solución '{sol}' no válidas, se omite")
+            continue
+        # cada sub-respuesta (A), B), C)...) en su propia línea, sin párrafos vacíos
+        opts = [re.sub(r"\n\n+", "\n", clean_block(sec[f"RESPUESTA {l}"])) for l in letters]
+        norma = clean_block(sec.get("NORMA", [])).replace("\n", " ")
+        nota = clean_block(sec.get("NOTA", [])).replace("\n", " ")
+        item = [cod, clean_block(sec.get("PREGUNTA", [])), opts, letters.index(sol), norma]
+        if nota:
+            item.append(nota)
+        out.append(item)
+    return out
+
+
+def find_files(src, pattern):
+    files = {}
+    for f in src.rglob("*"):
+        if f.is_file() and re.fullmatch(pattern, f.name, re.I):
+            files.setdefault(f.name.upper(), f)  # evita duplicados si el ZIP trae copias
+    return [f for _, f in sorted(files.items())]
+
+
 def main():
     try:
         _main()
@@ -132,6 +189,18 @@ def _main():
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"TOTAL {len(qs)} preguntas, {len(temas)} temas -> {dst} ({dst.stat().st_size/1e6:.2f} MB)")
+
+    casos = []
+    for f in find_files(src, r"cm1[a-h]\.txt"):
+        got = parse_casos(f)
+        print(f"::notice::{f.name}: {len(got)} casos")
+        casos += got
+    if casos:
+        dst2 = dst.parent / "casos.json"
+        dst2.write_text(json.dumps({"version": version, "q": casos}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        print(f"TOTAL {len(casos)} casos -> {dst2} ({dst2.stat().st_size/1e6:.2f} MB)")
+    else:
+        print("::warning::Sin casos prácticos")
 
 
 if __name__ == "__main__":

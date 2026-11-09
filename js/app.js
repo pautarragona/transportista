@@ -54,7 +54,9 @@
   // ---------- estado ----------
   const S = {
     bank: null,          // {version, materias, temas, q}
-    Q: [],               // [{id, m, t, text, opts, sol, norma}]
+    Q: [],               // [{id, m, t, text, opts, sol, norma}]  preguntas test
+    C: [],               // casos prácticos (id = "C" + código)
+    casosP: null,
     byId: new Map(),
     scope: "guest",      // "guest" | user id
     user: null,
@@ -72,7 +74,7 @@
     S.log = store.get(K("log"), []);
     S.exams = store.get(K("exams"), []);
     S.queue = store.get(K("queue"), []);
-    S.settings = Object.assign({ newPerDay: NEW_PER_DAY_DEFAULT, newOrder: "temas", examDate: "", materias: "ABCDEFGH" }, store.get(K("settings"), {}));
+    S.settings = Object.assign({ newPerDay: NEW_PER_DAY_DEFAULT, newCasosPerDay: 5, newOrder: "temas", examDate: "", materias: "ABCDEFGH" }, store.get(K("settings"), {}));
   }
   let saveT = null;
   function saveLocal() {
@@ -364,6 +366,21 @@
     const v = b.version || "";
     $("#bank-version").textContent = v.length === 6 ? `Versión del banco: ${v.slice(0, 2)}/${v.slice(2, 4)}/20${v.slice(4)}. ${fmt(S.Q.length)} preguntas.` : "";
   }
+  function ensureCasos() {
+    if (!S.casosP) {
+      S.casosP = fetch((CFG.dataUrl || "data/questions.json").replace("questions.json", "casos.json"), { cache: "no-cache" })
+        .then((r) => (r.ok ? r.json() : { q: [] }))
+        .then((b) => {
+          S.C = b.q.map(([code, text, opts, sol, norma, nota]) => ({ id: "C" + code, code, m: code[1], t: code.slice(1, 4), text, opts, sol, norma, nota, caso: true }));
+          S.C.forEach((q) => S.byId.set(q.id, q));
+        })
+        .catch(() => { S.C = []; });
+    }
+    return S.casosP;
+  }
+  const mOf = (id) => (id[0] === "C" ? id[2] : id[1]);
+  const codeOf = (q) => q.code || q.id;
+  const allItems = () => S.Q.concat(S.C);
   const materiaName = (m) => S.bank.materias[m] || m;
   const temaNum = (t) => String(parseInt(t.slice(1), 10));
   const temasOf = (m) => Object.keys(S.bank.temas).filter((t) => t[0] === m);
@@ -386,13 +403,14 @@
     const t = c.total || 1;
     return `<div class="bar" title="${c.master} dominadas · ${c.learn} aprendiendo · ${c.wrong} falladas · ${c.new} sin ver"><i class="m" style="width:${(100 * c.master) / t}%"></i><i class="l" style="width:${(100 * c.learn) / t}%"></i><i class="w" style="width:${(100 * c.wrong) / t}%"></i></div>`;
   }
-  function newToday() {
+  function newToday(casos = false) {
     const s = startOfDay();
     const firstSeen = new Set();
     let n = 0;
     // primera respuesta de una pregunta hoy = nueva introducida hoy
     const before = new Set();
     for (const [ts, id] of S.log) {
+      if ((id[0] === "C") !== casos) continue;
       if (ts < s) before.add(id);
       else if (!before.has(id) && !firstSeen.has(id)) { firstSeen.add(id); n++; }
     }
@@ -501,7 +519,7 @@
           <a class="card tile" href="#/estudiar?modo=marcadas"><div class="ico">${ICONS.star}</div><b>Marcadas</b><small><span class="count">${flagged}</span> preguntas</small></a>
           <a class="card tile" href="#/buscar"><div class="ico">${ICONS.search}</div><b>Buscar</b><small>Texto, norma o código</small></a>
           <a class="card tile" href="#/stats"><div class="ico">${ICONS.chart}</div><b>Progreso</b><small>Nota estimada: ${estimateScore()}/200</small></a>
-          <div class="card tile disabled"><div class="ico">${ICONS.case}</div><b>Casos prácticos</b><small>Próximamente</small></div>
+          <a class="card tile" href="#/casos"><div class="ico">${ICONS.case}</div><b>Casos prácticos</b><small id="casos-tile">2.ª parte del examen</small></a>
         </div>
 
         <section class="card">
@@ -512,6 +530,11 @@
       </div>`;
     $("#b-login") && ($("#b-login").onclick = () => openLogin("signup"));
     $("#b-settings").onclick = openSettings;
+    ensureCasos().then(() => {
+      const el = $("#casos-tile"); if (!el || !S.C.length) return;
+      const k = countsFor(S.C);
+      el.innerHTML = `${k.due ? `<span class="count">${k.due}</span> para repasar · ` : ""}${pct(k.seen, k.total)}% de ${fmt(k.total)} vistos`;
+    });
   };
 
   function openSettings() {
@@ -593,14 +616,28 @@
       title = `${m} · ${materiaName(m)}`;
       list = S.Q.filter((q) => q.m === m);
       list = p.get("orden") === "aleatorio" ? shuffle(list) : pendingFirst(list);
+    } else if (modo === "casos") {
+      const m = p.get("m");
+      const now2 = Date.now();
+      if (m) {
+        title = `Casos prácticos · ${m}`;
+        list = S.C.filter((q) => q.m === m);
+        list = p.get("orden") === "aleatorio" ? shuffle(list) : pendingFirst(list);
+      } else {
+        title = "Casos prácticos de hoy";
+        const due = S.C.filter((q) => isDue(card(q.id), now2)).sort((a, b) => card(a.id).due - card(b.id).due);
+        const fresh = shuffle(S.C.filter((q) => !card(q.id).seen)).slice(0, Math.max(0, S.settings.newCasosPerDay - newToday(true)));
+        list = due.concat(fresh);
+        empty = "Casos al día. Puedes practicar por materia desde la página de casos.";
+      }
     } else if (modo === "fallos") {
       title = "Mis fallos";
-      list = S.Q.filter((q) => { const c = S.progress[q.id]; return c && (c.last_correct === false || c.lapses >= 2); })
+      list = allItems().filter((q) => { const c = S.progress[q.id]; return c && (c.last_correct === false || c.lapses >= 2); })
         .sort((a, b) => { const A = card(a.id), B = card(b.id); return (A.last_correct === false ? 0 : 1) - (B.last_correct === false ? 0 : 1) || B.lapses - A.lapses || (A.correct / A.seen) - (B.correct / B.seen); });
       empty = "No tienes fallos pendientes. 💪";
     } else if (modo === "marcadas") {
       title = "Marcadas";
-      list = S.Q.filter((q) => S.progress[q.id]?.flagged);
+      list = allItems().filter((q) => S.progress[q.id]?.flagged);
       empty = "Aún no has marcado preguntas (usa ☆ al responder).";
     } else if (modo === "semana") {
       title = "Recap semanal";
@@ -625,7 +662,11 @@
     return [...cnt.entries()].sort((a, b) => b[1] - a[1]).map((x) => x[0]);
   }
 
-  routes.estudiar = (p) => {
+  routes.estudiar = async (p) => {
+    if (["casos", "fallos", "marcadas", "semana", "comunidad", "lista"].includes(p.get("modo"))) {
+      if (!S.C.length) app().innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
+      await ensureCasos();
+    }
     const sess = buildSession(p);
     if (!sess.list.length) {
       app().innerHTML = `<div class="card done-card"><h2>${esc(sess.title)}</h2><p class="muted">${esc(sess.empty || "No hay preguntas aquí.")}</p><a class="btn primary" href="#/">Volver al inicio</a></div>`;
@@ -646,18 +687,19 @@
     function renderQ() {
       const q = S.byId.get(state.id);
       const c = card(q.id);
+      const isCaso = !!q.caso;
       const tag = !c.seen ? `<span class="chip">Nueva</span>` : c.last_correct === false ? `<span class="chip bad">Fallada antes</span>` : status(c) === "master" ? `<span class="chip ok">Dominada</span>` : `<span class="chip warn">Repaso</span>`;
       const opts = state.order || (state.order = q.opts.map((_, i) => i)); // orden original (como en el examen)
       app().innerHTML = `
         <div class="quiz-top"><a class="btn ghost small" href="#/" title="Salir">✕</a><div class="bar"><i class="m" style="width:${(100 * done) / Math.max(total, done + queue.length + 1)}%"></i></div><span class="tiny">${queue.length + 1} quedan</span></div>
         <article class="card qcard">
-          <div class="qmeta"><span class="chip mat">${q.m}</span><span class="chip">Tema ${temaNum(q.t)}</span>${tag}<span class="spacer"></span><span class="tiny">${q.id}</span></div>
-          <div class="qtext">${esc(q.text)}</div>
+          <div class="qmeta"><span class="chip mat">${q.m}</span><span class="chip">${isCaso ? "Caso práctico" : "Tema " + temaNum(q.t)}</span>${tag}<span class="spacer"></span><span class="tiny">${codeOf(q)}</span></div>
+          <div class="qtext ${isCaso ? "caso" : ""}">${isCaso ? casoHTML(q.text) : esc(q.text)}</div>
           <div class="opts">${opts.map((i) => `<button class="opt" data-i="${i}"><span class="l">${LETTERS[i]}</span><span>${esc(q.opts[i])}</span></button>`).join("")}</div>
           <div id="after"></div>
           <div class="qactions"><button class="btn ghost small" id="b-flag" title="Marcar">${c.flagged ? "★ Marcada" : "☆ Marcar"}</button><button class="btn ghost small" id="b-report">⚑ Reportar error</button></div>
         </article>
-        <p class="tiny kbd-hint" style="text-align:center;margin-top:10px">Teclado: A–D o 1–4 para responder · Enter para seguir</p>`;
+        <p class="tiny kbd-hint" style="text-align:center;margin-top:10px">Teclado: ${isCaso ? "A–H o 1–8" : "A–D o 1–4"} para responder · Enter para seguir</p>`;
       $$(".opt").forEach((b) => (b.onclick = () => answer(parseInt(b.dataset.i, 10))));
       $("#b-flag").onclick = () => { const f = toggleFlag(q.id); $("#b-flag").textContent = f ? "★ Marcada" : "☆ Marcar"; };
       $("#b-report").onclick = () => openReport(q);
@@ -682,6 +724,7 @@
       after.innerHTML = `
         <div class="feedback ${ok ? "ok" : "bad"}"><b>${ok ? "¡Correcto!" : `Incorrecto. La buena es la ${LETTERS[q.sol]}.`}</b>
           ${q.norma ? `<div class="norma">📖 ${esc(q.norma)}</div>` : ""}
+          ${q.nota ? `<div class="norma">📝 ${esc(q.nota)}</div>` : ""}
           ${!ok ? `<div class="norma">Volverá a salir en unos minutos.</div>` : ""}</div>
         ${ok ? `<div class="grade">
             <button class="btn" data-g="1">Difícil<small>acerté dudando</small></button>
@@ -731,10 +774,16 @@
     next();
   };
 
+  function casoHTML(t) {
+    // resalta las preguntas finales del caso
+    const h = esc(t);
+    const i = h.search(/Responda a la/i);
+    return i > 0 ? h.slice(0, i) + `<b class="ask">${h.slice(i)}</b>` : h;
+  }
   function openReport(q) {
     modal(`
       <div class="row"><h2 style="margin:0">Reportar error</h2><span class="spacer"></span><button class="btn ghost small" data-x>✕</button></div>
-      <p class="small muted">Pregunta ${q.id}. ¿Qué está mal? (respuesta incorrecta, norma derogada, errata…)</p>
+      <p class="small muted">${q.caso ? "Caso" : "Pregunta"} ${codeOf(q)}. ¿Qué está mal? (respuesta incorrecta, norma derogada, errata…)</p>
       <textarea class="input" id="r-msg" rows="4" maxlength="1000"></textarea>
       <button class="btn primary block" id="r-send">Enviar</button>`,
       (m) => {
@@ -743,14 +792,15 @@
           const message = $("#r-msg", m).value.trim();
           if (!message) return;
           if (!S.user) { toast("Entra con tu cuenta para reportar."); return; }
-          const { error } = await S.sb.from("reports").insert({ qid: q.id, message });
+          const { error } = await S.sb.from("reports").insert({ qid: q.id, message: message });
           closeModal(); toast(error ? "No se pudo enviar" : "Gracias, reporte enviado");
         };
       });
   }
 
   // ---------- RECAP SEMANAL ----------
-  routes.semana = () => {
+  routes.semana = async () => {
+    await ensureCasos();
     const now = Date.now();
     const w = (from, to) => S.log.filter((r) => r[0] >= from && r[0] < to);
     const cur = w(now - 7 * DAY, now + 1), prev = w(now - 14 * DAY, now - 7 * DAY);
@@ -758,7 +808,7 @@
     const days = new Set(cur.map((r) => dayKey(r[0]))).size;
     const failIds = weekFailIds();
     const byM = {};
-    for (const [, id, ok] of cur) { const m = id[1]; byM[m] = byM[m] || [0, 0]; byM[m][0]++; if (ok) byM[m][1]++; }
+    for (const [, id, ok] of cur) { const m = mOf(id); byM[m] = byM[m] || [0, 0]; byM[m][0]++; if (ok) byM[m][1]++; }
     const newSeen = new Set(); const before = new Set(S.log.filter((r) => r[0] < now - 7 * DAY).map((r) => r[1]));
     cur.forEach((r) => { if (!before.has(r[1])) newSeen.add(r[1]); });
     const delta = (a, b) => (b ? (a >= b ? `<span class="chip ok">+${a - b}</span>` : `<span class="chip bad">${a - b}</span>`) : "");
@@ -783,20 +833,22 @@
   };
   function qItem(q, extra = "") {
     if (!q) return "";
-    return `<div class="qitem"><div class="tiny">${q.id} · ${q.m} · Tema ${temaNum(q.t)}${extra}</div><div class="q">${esc(q.text)}</div><div class="a">✓ ${LETTERS[q.sol]}) ${esc(q.opts[q.sol])}</div></div>`;
+    const txt = q.caso && q.text.length > 320 ? q.text.slice(0, 320) + "…" : q.text;
+    return `<div class="qitem"><div class="tiny">${codeOf(q)} · ${q.m} · ${q.caso ? "Caso práctico" : "Tema " + temaNum(q.t)}${extra}</div><div class="q pre">${esc(txt)}</div><div class="a pre">✓ ${LETTERS[q.sol]}) ${esc(q.opts[q.sol])}</div></div>`;
   }
 
   // ---------- COMUNIDAD ----------
   routes.comunidad = async () => {
     app().innerHTML = `<div class="stack"><div><h1>Lo que más falla la gente</h1><p class="muted small">Porcentaje de fallo en el <b>primer intento</b> de cada usuario. Datos anónimos y agregados.</p></div><div id="com" class="card"><div class="loading"><div class="spinner"></div></div></div></div>`;
     if (!S.sb) { $("#com").innerHTML = `<p class="empty">Las estadísticas globales necesitan conexión con el servidor.</p>`; return; }
+    await ensureCasos();
     try {
       const [{ data: rows, error }, { data: sum }] = await Promise.all([S.sb.rpc("community_stats", { min_attempts: 3 }), S.sb.rpc("community_summary")]);
       if (error) throw error;
       S.community = (rows || []).sort((a, b) => b.fail_rate - a.fail_rate || b.attempts - a.attempts);
       const top = S.community.slice(0, 100);
       const byM = {};
-      for (const r of S.community) { const m = r.qid[1]; byM[m] = byM[m] || [0, 0]; byM[m][0] += Number(r.attempts); byM[m][1] += Number(r.fails); }
+      for (const r of S.community) { const m = mOf(r.qid); byM[m] = byM[m] || [0, 0]; byM[m][0] += Number(r.attempts); byM[m][1] += Number(r.fails); }
       $("#com").outerHTML = `
         <div class="kpis"><div class="kpi"><b>${fmt(sum?.users || 0)}</b><span>estudiantes</span></div><div class="kpi"><b>${fmt(sum?.answers || 0)}</b><span>respuestas</span></div><div class="kpi"><b>${fmt(sum?.answers_7d || 0)}</b><span>esta semana</span></div><div class="kpi"><b>${fmt(sum?.exams || 0)}</b><span>simulacros</span></div></div>
         ${Object.keys(byM).length ? `<section class="card"><h2>Materias más difíciles</h2><table class="table"><tr><th>Materia</th><th class="num">Fallo</th></tr>${Object.entries(byM).sort((a, b) => b[1][1] / b[1][0] - a[1][1] / a[1][0]).map(([m, [a, f]]) => `<tr><td>${m} · ${esc(materiaName(m))}</td><td class="num">${pct(f, a)}%</td></tr>`).join("")}</table></section>` : ""}
@@ -813,6 +865,7 @@
 
   // ---------- BUSCAR ----------
   routes.buscar = (p) => {
+    ensureCasos().then(() => $("#q") && $("#q").dispatchEvent(new Event("input")));
     app().innerHTML = `
       <div class="stack">
         <h1>Buscar</h1>
@@ -826,12 +879,12 @@
       if (term.length < 2) { res.innerHTML = `<p class="empty">Escribe al menos 2 letras. Busca en preguntas, respuestas, normas y códigos.</p>`; return; }
       const words = term.split(/\s+/);
       const hits = [];
-      for (const q of S.Q) {
-        const hay = q._n || (q._n = norm(q.id + " " + q.text + " " + q.opts.join(" ") + " " + q.norma));
+      for (const q of allItems()) {
+        const hay = q._n || (q._n = norm(codeOf(q) + " " + q.text + " " + q.opts.join(" ") + " " + q.norma));
         if (words.every((w) => hay.includes(w))) { hits.push(q); if (hits.length >= 60) break; }
       }
       const hl = (s) => { let h = esc(s); for (const w of raw.split(/\s+/).filter((x) => x.length > 1)) h = h.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"), "<mark>$1</mark>"); return h; };
-      res.innerHTML = hits.length ? `<p class="tiny">${hits.length >= 60 ? "Primeros 60 resultados" : hits.length + " resultados"}</p>` + hits.map((q) => `<div class="qitem search-hit"><div class="tiny">${q.id} · ${esc(q.norma)}</div><div class="q">${hl(q.text)}</div>${q.opts.map((o, i) => `<div class="${i === q.sol ? "a" : "small muted"}">${i === q.sol ? "✓" : "·"} ${LETTERS[i]}) ${hl(o)}</div>`).join("")}</div>`).join("")
+      res.innerHTML = hits.length ? `<p class="tiny">${hits.length >= 60 ? "Primeros 60 resultados" : hits.length + " resultados"}</p>` + hits.map((q) => `<div class="qitem search-hit"><div class="tiny">${q.caso ? "Caso " : ""}${codeOf(q)} · ${esc(q.norma)}</div><div class="q pre">${hl(q.text)}</div>${q.opts.map((o, i) => `<div class="pre ${i === q.sol ? "a" : "small muted"}">${i === q.sol ? "✓" : "·"} ${LETTERS[i]}) ${hl(o)}</div>`).join("")}</div>`).join("")
         : `<p class="empty">Sin resultados.</p>`;
     };
     let t; $("#q").oninput = () => { clearTimeout(t); t = setTimeout(run, 150); };
@@ -841,7 +894,7 @@
   // ---------- SIMULACRO ----------
   routes.examen = (p) => {
     const m = p.get("m");
-    const last = S.exams.filter((e) => e.kind === "test").slice(-5).reverse();
+    const last = S.exams.filter((e) => e.kind !== "casos").slice(-5).reverse();
     app().innerHTML = `
       <div class="stack">
         <div><h1>Simulacro de examen</h1><p class="muted small">Como el real: preguntas de 4 opciones, cada acierto suma 1, cada fallo resta 1/3 y en blanco no cuenta. Para aprobar la parte de test necesitas al menos el 50%; y en total (test + casos) al menos el 60%.</p></div>
@@ -858,7 +911,26 @@
     $$("[data-n]").forEach((b) => (b.onclick = () => { location.hash = `#/examen/run?n=${b.dataset.n}&min=${b.dataset.min}${$("#x-unseen").checked ? "&unseen=1" : ""}`; }));
   };
   const _examenMenu = routes.examen;
-  routes.examen = (p, sub) => (sub[0] === "run" ? runExam(p) : _examenMenu(p));
+  routes.examen = (p, sub) => {
+    if (sub[0] !== "run") return _examenMenu(p);
+    if (p.get("tipo") !== "casos") return runExam(p);
+    app().innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
+    ensureCasos().then(() => (S.C.length ? runExam(p) : (app().innerHTML = `<p class="empty">Los casos prácticos no están disponibles.</p>`)));
+  };
+  function pickCasos(n, m) {
+    if (m) return shuffle(S.C.filter((q) => q.m === m)).slice(0, n);
+    // n casos de materias distintas, con probabilidad proporcional al nº de casos de cada materia
+    const by = {}; S.C.forEach((q) => (by[q.m] = by[q.m] || []).push(q));
+    const keys = Object.keys(by), out = [];
+    while (out.length < n && keys.length) {
+      const tot = keys.reduce((a, k) => a + by[k].length, 0);
+      let x = Math.random() * tot, k = keys[0];
+      for (const kk of keys) { x -= by[kk].length; if (x <= 0) { k = kk; break; } }
+      out.push(by[k][Math.floor(Math.random() * by[k].length)]);
+      keys.splice(keys.indexOf(k), 1);
+    }
+    return out.sort((a, b) => a.m.localeCompare(b.m));
+  }
 
   function pickExam(n, m, preferUnseen) {
     const pool = m ? S.Q.filter((q) => q.m === m) : S.Q;
@@ -880,10 +952,13 @@
   }
 
   function runExam(p) {
-    const n = Math.min(200, parseInt(p.get("n"), 10) || 200);
+    const casos = p.get("tipo") === "casos";
+    const unit = casos ? 50 : 1; // en casos prácticos cada caso vale 50 puntos
+    const n = Math.min(200, parseInt(p.get("n"), 10) || (casos ? 4 : 200));
     const minutes = parseInt(p.get("min"), 10) || 120;
     const m = p.get("m");
-    const qs = pickExam(n, m, p.get("unseen") === "1");
+    const qs = casos ? pickCasos(n, m) : pickExam(n, m, p.get("unseen") === "1");
+    const what = casos ? "Caso" : "Pregunta";
     const ans = new Array(qs.length).fill(null);
     const flags = new Set();
     let cur = 0, finished = false;
@@ -895,8 +970,8 @@
       app().innerHTML = `
         <div class="exam-head"><span class="timer" id="timer"></span><span class="tiny">${ans.filter((a) => a != null).length}/${qs.length} respondidas</span><span class="spacer"></span><button class="btn small" id="x-grid">Índice</button><button class="btn primary small" id="x-end">Entregar</button></div>
         <article class="card qcard">
-          <div class="qmeta"><span class="chip mat">${q.m}</span><span class="chip">Pregunta ${cur + 1} de ${qs.length}</span><span class="spacer"></span><button class="btn ghost small" id="x-flag">${flags.has(cur) ? "★ Revisar" : "☆ Marcar para revisar"}</button></div>
-          <div class="qtext">${esc(q.text)}</div>
+          <div class="qmeta"><span class="chip mat">${q.m}</span><span class="chip">${what} ${cur + 1} de ${qs.length}</span><span class="spacer"></span><button class="btn ghost small" id="x-flag">${flags.has(cur) ? "★ Revisar" : "☆ Marcar para revisar"}</button></div>
+          <div class="qtext ${casos ? "caso" : ""}">${casos ? casoHTML(q.text) : esc(q.text)}</div>
           <div class="opts">${q.opts.map((o, i) => `<button class="opt ${ans[cur] === i ? "picked" : ""}" data-i="${i}"><span class="l">${LETTERS[i]}</span><span>${esc(o)}</span></button>`).join("")}</div>
           <div class="row" style="margin-top:14px"><button class="btn" id="x-prev" ${cur === 0 ? "disabled" : ""}>← Anterior</button>${ans[cur] != null ? `<button class="btn ghost small" id="x-clear">Dejar en blanco</button>` : ""}<span class="spacer"></span><button class="btn dark" id="x-next">${cur === qs.length - 1 ? "Revisar y entregar" : "Siguiente →"}</button></div>
         </article>
@@ -920,7 +995,7 @@
     }
     function confirmEnd() {
       const blank = ans.filter((a) => a == null).length;
-      modal(`<h2>¿Entregar el examen?</h2><p class="muted">${blank ? `Tienes ${blank} preguntas en blanco${flags.size ? ` y ${flags.size} marcadas para revisar` : ""}.` : "Has respondido todas."}</p>
+      modal(`<h2>¿Entregar el examen?</h2><p class="muted">${blank ? `Tienes ${blank} ${casos ? "casos" : "preguntas"} en blanco${flags.size ? ` y ${flags.size} marcadas para revisar` : ""}.` : "Has respondido todas."}</p>
         <div class="row"><button class="btn" data-x>Seguir</button><span class="spacer"></span><button class="btn primary" id="x-ok">Entregar</button></div>`,
         (mm) => { $("[data-x]", mm).onclick = closeModal; $("#x-ok", mm).onclick = () => { closeModal(); finish(); }; });
     }
@@ -938,22 +1013,24 @@
         ok ? (correct++, pm.c++) : (wrong++, pm.w++);
         recordAnswer(q.id, ans[i], ok ? 2 : 0, "exam");
       });
-      const score = correct - wrong / 3;
-      const e = { kind: "test", total: qs.length, correct, wrong, blank, score: Math.round(score * 100) / 100, duration_s: Math.round((Date.now() - t0) / 1000), per_materia: perM, at: Date.now() };
+      const score = (correct - wrong / 3) * unit;
+      const total = qs.length * unit;
+      const e = { kind: casos ? "casos" : "test", total, correct, wrong, blank, score: Math.round(score * 100) / 100, duration_s: Math.round((Date.now() - t0) / 1000), per_materia: perM, at: Date.now() };
       S.exams.push(e);
       if (S.user) { S.queue.push({ t: "e", row: examToRow(e) }); scheduleFlush(300); }
       saveLocal();
-      const pass = score >= qs.length / 2;
+      const pass = score >= total / 2;
       const wrongIds = qs.filter((q, i) => ans[i] != null && ans[i] !== q.sol).map((q) => q.id);
       app().innerHTML = `
         <div class="stack">
           <section class="card" style="text-align:center">
-            <p class="muted" style="margin:0">Resultado${m ? ` · Materia ${m}` : ""}</p>
-            <div class="score-big" style="color:${pass ? "var(--ok)" : "var(--bad)"}">${score.toFixed(1)}<span style="font-size:1.3rem;color:var(--ink-3)"> / ${qs.length}</span></div>
-            <p><span class="chip ${pass ? "ok" : "bad"}">${pass ? "Aprobarías el test" : "No llegarías al 50%"}</span></p>
-            <p class="muted small">${correct} aciertos · ${wrong} fallos (−${(wrong / 3).toFixed(1)}) · ${blank} en blanco · ${Math.round(e.duration_s / 60)} min</p>
-            ${qs.length === 200 ? `<p class="small">Para el aprobado total (240/400) con el mínimo en casos prácticos (100) necesitarías ${score >= 140 ? "✓ ya lo tienes" : `140 en el test (te faltan ${(140 - score).toFixed(1)})`}.</p>` : ""}
-            <div class="row" style="justify-content:center">${wrongIds.length ? `<a class="btn" href="#/estudiar?modo=lista&titulo=${encodeURIComponent("Fallos del simulacro")}&ids=${wrongIds.join(",")}">Repasar los ${wrongIds.length} fallos</a>` : ""}<a class="btn primary" href="#/examen">Otro simulacro</a></div>
+            <p class="muted" style="margin:0">Resultado${casos ? " · Casos prácticos" : ""}${m ? ` · Materia ${m}` : ""}</p>
+            <div class="score-big" style="color:${pass ? "var(--ok)" : "var(--bad)"}">${score.toFixed(1)}<span style="font-size:1.3rem;color:var(--ink-3)"> / ${total}</span></div>
+            <p><span class="chip ${pass ? "ok" : "bad"}">${pass ? (casos ? "Aprobarías la parte práctica" : "Aprobarías el test") : "No llegarías al 50%"}</span></p>
+            <p class="muted small">${correct} aciertos · ${wrong} fallos (−${((wrong / 3) * unit).toFixed(1)}) · ${blank} en blanco · ${Math.round(e.duration_s / 60)} min</p>
+            ${casos && qs.length === 4 ? `<p class="small">Con ${score.toFixed(1)} aquí, para el aprobado total (240/400) necesitarías ${Math.max(100, 240 - score).toFixed(1)} en el test.</p>` : ""}
+            ${!casos && qs.length === 200 ? `<p class="small">Para el aprobado total (240/400) con el mínimo en casos prácticos (100) necesitarías ${score >= 140 ? "✓ ya lo tienes" : `140 en el test (te faltan ${(140 - score).toFixed(1)})`}.</p>` : ""}
+            <div class="row" style="justify-content:center">${wrongIds.length ? `<a class="btn" href="#/estudiar?modo=lista&titulo=${encodeURIComponent("Fallos del simulacro")}&ids=${wrongIds.join(",")}">Repasar los ${wrongIds.length} fallos</a>` : ""}<a class="btn primary" href="${casos ? "#/casos" : "#/examen"}">Otro simulacro</a></div>
           </section>
           <section class="card"><h2>Por materia</h2><table class="table"><tr><th>Materia</th><th class="num">Acier.</th><th class="num">Fallos</th><th class="num">Nota</th></tr>
             ${Object.entries(perM).map(([k, v]) => { const s = v.c - v.w / 3; return `<tr><td>${k} · ${esc(materiaName(k))}</td><td class="num">${v.c}/${v.t}</td><td class="num">${v.w}</td><td class="num"><span class="chip ${s / v.t >= 0.5 ? "ok" : "bad"}">${pct(s, v.t)}%</span></td></tr>`; }).join("")}</table></section>
@@ -965,7 +1042,7 @@
         return qs.map((q, i) => {
           const st = ans[i] == null ? "blank" : ans[i] === q.sol ? "ok" : "bad";
           if (f !== "all" && f !== st) return "";
-          return `<div class="qitem" id="r${i}"><div class="tiny">${i + 1} · ${q.id} · ${esc(q.norma)}</div><div class="q">${esc(q.text)}</div>${st === "bad" ? `<div class="w">✗ Tu respuesta: ${LETTERS[ans[i]]}) ${esc(q.opts[ans[i]])}</div>` : st === "blank" ? `<div class="small muted">En blanco</div>` : ""}<div class="a">✓ ${LETTERS[q.sol]}) ${esc(q.opts[q.sol])}</div></div>`;
+          return `<div class="qitem" id="r${i}"><div class="tiny">${i + 1} · ${codeOf(q)} · ${esc(q.norma)}</div><div class="q pre">${esc(q.text)}</div>${st === "bad" ? `<div class="w pre">✗ Tu respuesta: ${LETTERS[ans[i]]}) ${esc(q.opts[ans[i]])}</div>` : st === "blank" ? `<div class="small muted">En blanco</div>` : ""}<div class="a pre">✓ ${LETTERS[q.sol]}) ${esc(q.opts[q.sol])}</div></div>`;
         }).join("") || `<p class="empty">Nada por aquí.</p>`;
       }
       $$("#rev-f button").forEach((b) => (b.onclick = () => { $$("#rev-f button").forEach((x) => x.classList.toggle("on", x === b)); $("#rev").innerHTML = reviewList(b.dataset.f); }));
@@ -974,8 +1051,9 @@
     const onKey = (e) => {
       if (finished || !$("#modal").hidden || e.target.matches("input, textarea")) return;
       const k = e.key.toUpperCase();
-      let i = "ABCD".indexOf(k);
-      if (i < 0 && /^[1-4]$/.test(k)) i = parseInt(k, 10) - 1;
+      const nOpts = qs[cur].opts.length;
+      let i = "ABCDEFGH".slice(0, nOpts).indexOf(k);
+      if (i < 0 && /^[1-8]$/.test(k) && parseInt(k, 10) <= nOpts) i = parseInt(k, 10) - 1;
       if (i >= 0) { e.preventDefault(); $$(".opt")[i]?.click(); }
       else if (e.key === "ArrowRight" && cur < qs.length - 1) { cur++; render(); }
       else if (e.key === "ArrowLeft" && cur > 0) { cur--; render(); }
@@ -1035,8 +1113,36 @@
           }).join("")}</table>
           <div class="legend" style="margin-top:.6rem"><span><i style="background:var(--master)"></i>Dominadas (intervalo ≥ ${MASTER_IVL} días)</span><span><i style="background:var(--learn)"></i>Aprendiendo</span><span><i style="background:var(--bad)"></i>Falladas</span></div>
         </section>
-        <section class="card"><h2>Simulacros</h2>${S.exams.length ? `<table class="table"><tr><th>Fecha</th><th>Tipo</th><th class="num">Nota</th><th class="num">%</th></tr>${S.exams.slice().reverse().slice(0, 20).map((e) => `<tr><td>${new Date(e.at).toLocaleDateString("es-ES")}</td><td>${e.total} preg.</td><td class="num">${e.score.toFixed(1)}</td><td class="num"><span class="chip ${e.score / e.total >= 0.5 ? "ok" : "bad"}">${pct(e.score, e.total)}%</span></td></tr>`).join("")}</table>` : `<p class="empty">Aún no has hecho ningún simulacro. <a href="#/examen">Hacer uno</a></p>`}</section>
+        <section class="card"><h2>Simulacros</h2>${S.exams.length ? `<table class="table"><tr><th>Fecha</th><th>Tipo</th><th class="num">Nota</th><th class="num">%</th></tr>${S.exams.slice().reverse().slice(0, 20).map((e) => `<tr><td>${new Date(e.at).toLocaleDateString("es-ES")}</td><td>${e.kind === "casos" ? "Casos" : e.total + " preg."}</td><td class="num">${e.score.toFixed(1)}/${e.total}</td><td class="num"><span class="chip ${e.score / e.total >= 0.5 ? "ok" : "bad"}">${pct(e.score, e.total)}%</span></td></tr>`).join("")}</table>` : `<p class="empty">Aún no has hecho ningún simulacro. <a href="#/examen">Hacer uno</a></p>`}</section>
         <p class="tiny">La nota estimada supone que contestas todo: preguntas dominadas ≈ 95% de acierto, vistas y acertadas ≈ 72–97%, falladas ≈ 30% y sin ver ≈ 35%.</p>
+      </div>`;
+  };
+
+  // ---------- CASOS PRÁCTICOS ----------
+  routes.casos = async () => {
+    app().innerHTML = `<div class="loading"><div class="spinner"></div></div>`;
+    await ensureCasos();
+    if (!S.C.length) { app().innerHTML = `<div class="card empty"><h2>Casos prácticos</h2><p>No se han podido cargar.</p></div>`; return; }
+    const c = countsFor(S.C);
+    const nt = newToday(true);
+    const newLeft = Math.min(Math.max(0, S.settings.newCasosPerDay - nt), c.new);
+    const last = S.exams.filter((e) => e.kind === "casos").slice(-5).reverse();
+    app().innerHTML = `
+      <div class="stack">
+        <div><h1>Casos prácticos</h1><p class="muted small">Segunda parte del examen: <b>4 casos</b> con <b>8 respuestas</b> cada uno (cada respuesta combina varias sub-respuestas). Acierto +50, fallo −16,7, en blanco 0. Máximo 200; necesitas al menos 100, y 240 entre las dos partes.</p></div>
+        <section class="card hero">
+          <h1>Casos de hoy</h1>
+          <div class="hero-stats"><div><b>${c.due}</b><span>para repasar</span></div><div><b>${newLeft}</b><span>nuevos (${nt}/${S.settings.newCasosPerDay} hoy)</span></div><div><b>${fmt(c.total)}</b><span>casos en el banco</span></div></div>
+          <div class="row"><a class="btn primary lg" href="#/estudiar?modo=casos">${ICONS.play.replace("<svg", '<svg width="18" height="18" fill="currentColor"')} Empezar</a>
+          <a class="btn small" href="#/examen/run?tipo=casos&n=4&min=120" style="background:rgba(255,255,255,.1);border-color:transparent;color:#fff">Simulacro (4 casos · 2 h)</a></div>
+        </section>
+        <section class="card"><div class="row"><h2 style="margin:0">Por materia</h2><span class="spacer"></span><span class="tiny">${pct(c.seen, c.total)}% visto</span></div>
+          <table class="table"><tr><th>Materia</th><th style="width:30%">Progreso</th><th class="num">Casos</th><th></th></tr>
+          ${"ABCDEFGH".split("").map((m) => { const qs = S.C.filter((q) => q.m === m); if (!qs.length) return ""; const k = countsFor(qs);
+            return `<tr><td><b>${m}</b> <span class="hide-sm">${esc(materiaName(m))}</span></td><td>${barHTML(k)}</td><td class="num">${k.seen}/${k.total}</td><td class="num"><a class="btn small" href="#/estudiar?modo=casos&m=${m}">Estudiar</a></td></tr>`; }).join("")}
+          </table></section>
+        ${last.length ? `<section class="card"><h2>Últimos simulacros de casos</h2><table class="table"><tr><th>Fecha</th><th class="num">Nota</th><th class="num">%</th></tr>${last.map((e) => `<tr><td>${new Date(e.at).toLocaleDateString("es-ES")}</td><td class="num">${e.score.toFixed(1)} / ${e.total}</td><td class="num"><span class="chip ${e.score / e.total >= 0.5 ? "ok" : "bad"}">${pct(e.score, e.total)}%</span></td></tr>`).join("")}</table></section>` : ""}
+        <p class="tiny">Consejo: lee primero las preguntas finales del caso (en negrita) y luego el enunciado; descarta respuestas en cuanto una de sus sub-respuestas sea falsa.</p>
       </div>`;
   };
 

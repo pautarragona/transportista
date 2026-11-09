@@ -282,3 +282,7 @@ p { margin: 0 0 .75rem; }
 
 #after { scroll-margin-bottom: calc(84px + env(safe-area-inset-bottom)); }
 @media (hover: none) { .kbd, .kbd-hint { display: none; } }
+.qtext.caso { font-weight: 400; font-size: 1rem; white-space: pre-line; line-height: 1.6; }
+.qtext.caso .ask { display: block; margin-top: .6rem; font-weight: 650; }
+.opt span:last-child { white-space: pre-line; }
+.pre { white-space: pre-line; }

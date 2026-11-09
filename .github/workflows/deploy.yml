@@ -26,9 +26,6 @@ jobs:
           python-version: "3.12"
       - name: Descargar banco oficial del Ministerio
         run: python scripts/fetch_bank.py
-      - name: Casos prácticos (diagnóstico)
-        continue-on-error: true
-        run: python scripts/peek_casos.py
       - name: Convertir a JSON
         run: python scripts/build_data.py bank "$(cat bank/VERSION)"
       - name: Preparar web
