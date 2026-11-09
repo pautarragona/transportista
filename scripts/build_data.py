@@ -207,6 +207,15 @@ def _main():
     else:
         print("::warning::Sin casos prácticos")
 
+    try:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        from normas import build_links
+        links, summary = build_links([q[4] for q in qs] + [c[4] for c in casos])
+        (dst.parent / "normas.json").write_text(json.dumps(links, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        print("::notice::" + summary)
+    except Exception as e:  # noqa: BLE001
+        print(f"::warning::No se generaron enlaces a normas: {e}")
+
 
 if __name__ == "__main__":
     main()

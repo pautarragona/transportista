@@ -31,7 +31,7 @@ jobs:
       - name: Preparar web
         run: |
           mkdir -p _site
-          cp -r index.html css js data favicon.svg .nojekyll _site/ 2>/dev/null || true
+          cp -r index.html css js data icons favicon.svg manifest.webmanifest sw.js .nojekyll _site/
           ls -la _site _site/data
       - uses: actions/upload-pages-artifact@v4
         with:
