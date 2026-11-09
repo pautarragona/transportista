@@ -40,7 +40,7 @@ BOE = {
     "ley 38/1992": ("BOE-A-1992-28741", "38/1992"),
     "ley 27/2014": ("BOE-A-2014-12328", "27/2014"),
     "ley 35/2006": ("BOE-A-2006-20764", "35/2006"),
-    "ley 19/1985": ("BOE-A-1985-14036", "19/1985"),
+    "ley 19/1985": ("BOE-A-1985-14880", "19/1985"),
     "pgc": ("BOE-A-2007-19884", "1514/2007"),
     "ley 50/1980": ("BOE-A-1980-22501", "50/1980"),
     "rdleg 8/2004": ("BOE-A-2004-18911", "8/2004"),
@@ -50,7 +50,11 @@ BOE = {
     "rd 818/2009": ("BOE-A-2009-9481", "818/2009"),
     "lo 10/1995": ("BOE-A-1995-25444", "10/1995"),
     "rdleg 6/2015": ("BOE-A-2015-11722", "6/2015"),
-    "rd 84/1996": ("BOE-A-1996-1983", "84/1996"),
+    "rd 84/1996": ("BOE-A-1996-4447", "84/1996"),
+    "ley 14/2013": ("BOE-A-2013-10074", "14/2013"),
+    "ley 60/2003": ("BOE-A-2003-23646", "60/2003"),
+    "rd 439/2007": ("BOE-A-2007-6820", "439/2007"),
+    "cmr": ("BOE-A-1974-753", "Transporte Internacional de Mercanc"),
 }
 
 TYPES = [
@@ -71,6 +75,8 @@ def canon(base: str):
         return "ccom"
     if "plan general de contabilidad" in b:
         return "pgc"
+    if b.startswith("convenio cmr") or b == "cmr":
+        return "cmr"
     m = re.match(r"(?:reglamento(?: comunitario)?|reglamento delegado|reglamento de ejecuci[óo]n)\s*\((?:ce|ue|cee)\)\s*(?:n[º°o]\.?\s*)?(\d+)/(\d{4})", b)
     if m:
         return f"eu-r {m.group(2)} {int(m.group(1)):04d}"
