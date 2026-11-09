@@ -111,6 +111,9 @@ def clean_block(lines):
     return "\n".join(out).strip()
 
 
+SKIPPED = []
+
+
 def parse_casos(path: pathlib.Path):
     text = read_text(path).replace("\r\n", "\n").replace("\r", "\n")
     out = []
@@ -129,7 +132,8 @@ def parse_casos(path: pathlib.Path):
         letters = [l for l in "ABCDEFGH" if f"RESPUESTA {l}" in sec]
         sol = re.sub(r"^RESPUESTA\s*", "", clean_block(sec.get("SOLUCION", [])).upper()).strip(" .")
         if len(letters) < 2 or sol not in letters:
-            print(f"::warning::caso {cod}: respuestas {letters} / solución '{sol}' no válidas, se omite")
+            print(f"caso {cod}: respuestas {letters} / solución '{sol}' no válidas, se omite")
+            SKIPPED.append(cod)
             continue
         # cada sub-respuesta (A), B), C)...) en su propia línea, sin párrafos vacíos
         opts = [re.sub(r"\n\n+", "\n", clean_block(sec[f"RESPUESTA {l}"])) for l in letters]
@@ -170,7 +174,7 @@ def _main():
         print("::error::No se encontraron pm1A..H.txt. Ficheros:", [str(x) for x in src.rglob("*")][:40])
     for _, f in sorted(files.items()):
         got = parse_file(f)
-        print(f"::notice::{f.name}: {len(got)} preguntas")
+        print(f"{f.name}: {len(got)} preguntas")
         qs += got
     assert len(qs) > 1000, f"solo {len(qs)} preguntas: algo ha ido mal"
     seen, uniq = set(), []
@@ -193,12 +197,13 @@ def _main():
     casos = []
     for f in find_files(src, r"cm1[a-h]\.txt"):
         got = parse_casos(f)
-        print(f"::notice::{f.name}: {len(got)} casos")
+        print(f"{f.name}: {len(got)} casos")
         casos += got
     if casos:
         dst2 = dst.parent / "casos.json"
         dst2.write_text(json.dumps({"version": version, "q": casos}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        print(f"TOTAL {len(casos)} casos -> {dst2} ({dst2.stat().st_size/1e6:.2f} MB)")
+        per = collections.Counter(c[0][1] for c in casos)
+        print(f"::notice::RESUMEN test={len(qs)} casos={len(casos)} por materia={dict(sorted(per.items()))} omitidos={SKIPPED[:20]} ({len(SKIPPED)}) opciones={collections.Counter(len(c[2]) for c in casos)}")
     else:
         print("::warning::Sin casos prácticos")
 
