@@ -20,8 +20,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Descargar banco oficial del Ministerio
@@ -33,7 +33,7 @@ jobs:
           mkdir -p _site
           cp -r index.html css js data favicon.svg .nojekyll _site/ 2>/dev/null || true
           ls -la _site _site/data
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: _site
 

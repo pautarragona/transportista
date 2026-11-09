@@ -129,6 +129,7 @@ def _main():
     temas = {t: tema_label(n) for t, n in sorted(by_tema.items())}
     out = {"version": version, "materias": MATERIAS, "temas": temas, "q": qs}
     dst = pathlib.Path(__file__).resolve().parent.parent / "data" / "questions.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"TOTAL {len(qs)} preguntas, {len(temas)} temas -> {dst} ({dst.stat().st_size/1e6:.2f} MB)")
 
