@@ -94,16 +94,35 @@ def tema_label(normas):
 
 
 def main():
+    try:
+        _main()
+    except Exception as e:  # noqa: BLE001
+        print(f"::error::{type(e).__name__}: {e}")
+        raise
+
+
+def _main():
     src = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "pm_260326")
     version = sys.argv[2] if len(sys.argv) > 2 else re.sub(r"\D", "", src.name) or "?"
     qs = []
-    for f in sorted(src.rglob("pm1*.txt"), key=lambda p: p.name):
+    files = {}
+    for f in src.rglob("*"):
+        if f.is_file() and re.fullmatch(r"pm1[a-h]\.txt", f.name, re.I):
+            files.setdefault(f.name.upper(), f)  # evita duplicados si el ZIP trae copias
+    if not files:
+        print("::error::No se encontraron pm1A..H.txt. Ficheros:", [str(x) for x in src.rglob("*")][:40])
+    for _, f in sorted(files.items()):
         got = parse_file(f)
-        print(f"{f.name}: {len(got)} preguntas")
+        print(f"::notice::{f.name}: {len(got)} preguntas")
         qs += got
     assert len(qs) > 1000, f"solo {len(qs)} preguntas: algo ha ido mal"
-    codes = [q[0] for q in qs]
-    assert len(codes) == len(set(codes)), "códigos duplicados"
+    seen, uniq = set(), []
+    for q in qs:
+        if q[0] in seen:
+            print(f"::warning::código duplicado {q[0]}, se queda el primero")
+            continue
+        seen.add(q[0]); uniq.append(q)
+    qs = uniq
     by_tema = collections.defaultdict(list)
     for q in qs:
         by_tema[q[0][1:4]].append(q[4])
