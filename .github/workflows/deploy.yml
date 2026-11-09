@@ -1,0 +1,48 @@
+name: Construir y publicar
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"   # cada lunes: comprueba si el Ministerio ha actualizado el banco
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Descargar banco oficial del Ministerio
+        run: python scripts/fetch_bank.py
+      - name: Convertir a JSON
+        run: python scripts/build_data.py bank "$(cat bank/VERSION)"
+      - name: Preparar web
+        run: |
+          mkdir -p _site
+          cp -r index.html css js data favicon.svg .nojekyll _site/ 2>/dev/null || true
+          ls -la _site _site/data
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

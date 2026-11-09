@@ -1,0 +1,4 @@
+bank/
+_site/
+__pycache__/
+data/questions.json
